@@ -1,9 +1,11 @@
 using AutoMapper;
 using BLL.Dtos.Appointment;
+using BLL.Services.AbstractServices;
 using BLL.Services.AbstractServices.AppointmentModule;
 using DAL.Exceptions;
 using DAL.Exceptions.AppointmentModule;
 using DAL.Models.AppointmentModule;
+using DAL.Models.Users;
 using DAL.Repository;
 using DAL.Shared.Enums;
 using DAL.Specifications.Appointment;
@@ -14,28 +16,14 @@ using System.Threading.Tasks;
 
 namespace BLL.Services.ImplementationService.AppointmentModule
 {
-    public class AppointmentService : IAppointmentService
+    public class AppointmentService(IUnitOfWork _unitOfWork, IMapper _mapper, IUserRepository _userRepository, INotificationService _notificationService) : IAppointmentService
     {
-        private readonly IUnitOfWork _unitOfWork;
-        private readonly IMapper _mapper;
-        private readonly IGenaricRepository<Appointment> _repo;
-        private readonly IGenaricRepository<DoctorSchedule> _scheduleRepo;
-        private readonly IUserRepository _userRepository;
-
-        public AppointmentService(IUnitOfWork unitOfWork, IMapper mapper, IUserRepository userRepository)
-        {
-            _unitOfWork = unitOfWork;
-            _mapper = mapper;
-            _repo = _unitOfWork.GetRepository<Appointment>();
-            _scheduleRepo = _unitOfWork.GetRepository<DoctorSchedule>();
-            _userRepository = userRepository;
-        }
 
         #region Public Methods
         
         public async Task<AppointmentDto> BookAppointmentAsync(int patientId, CreateAppointmentDto dto)
         {
-            await ValidatePatientAsync(patientId);
+            var patient = await ValidatePatientAsync(patientId);
             ValidateFutureDate(dto.AppointmentDate);
 
             var doctor = await _userRepository.GetDoctorByIdAsync(dto.DoctorId)
@@ -53,9 +41,11 @@ namespace BLL.Services.ImplementationService.AppointmentModule
             appointmentEntity.Status = AppointmentStatus.Pending;
             appointmentEntity.CreatedAt = DateTime.UtcNow;
 
-            await _repo.AddAsync(appointmentEntity);
+            await _unitOfWork.GetRepository<Appointment>().AddAsync(appointmentEntity);
             await _unitOfWork.SaveChangesAsync();
             var appointment = await GetAppointmentOrThrowAsync(appointmentEntity.Id);
+
+            await _notificationService.SendNotificationAsync($"Patient with name {patient.Fullname} has booked an appointment.", NotificationType.AppointmentBookRequest, appointment.DoctorId);
             return _mapper.Map<AppointmentDto>(appointment);
         }
 
@@ -70,8 +60,19 @@ namespace BLL.Services.ImplementationService.AppointmentModule
 
             appointment.Status = AppointmentStatus.Cancelled;
             appointment.UpdatedAt = DateTime.UtcNow;
-            _repo.Update(appointment);
+            _unitOfWork.GetRepository<Appointment>().Update(appointment);
+
+            if (appointment.PatientId == userId)
+            {
+                await _notificationService.SendNotificationAsync($"Patient {appointment.Patient?.Fullname ?? ""} has canceled an appointment.", NotificationType.AppointmentCanceled, appointment.DoctorId);
+            }
+            else if (appointment.DoctorId == userId)
+            {
+                await _notificationService.SendNotificationAsync($"Doctor {appointment.Doctor?.Fullname ?? ""} has canceled an appointment.", NotificationType.AppointmentCanceled, appointment.PatientId);
+            }
+
             await _unitOfWork.SaveChangesAsync();
+
 
             return _mapper.Map<AppointmentDto>(appointment);
         }
@@ -88,7 +89,11 @@ namespace BLL.Services.ImplementationService.AppointmentModule
 
             appointment.Status = AppointmentStatus.Confirmed;
             appointment.UpdatedAt = DateTime.UtcNow;
-            _repo.Update(appointment);
+            _unitOfWork.GetRepository<Appointment>().Update(appointment);
+
+            await _notificationService.SendNotificationAsync($"Doctor {appointment.Doctor?.Fullname ?? ""} has confirmed an appointment.", NotificationType.AppointmentConfirmed, appointment.PatientId);
+
+
             await _unitOfWork.SaveChangesAsync();
 
             return _mapper.Map<AppointmentDto>(appointment);
@@ -106,7 +111,10 @@ namespace BLL.Services.ImplementationService.AppointmentModule
 
             appointment.Status = AppointmentStatus.Completed;
             appointment.UpdatedAt = DateTime.UtcNow;
-            _repo.Update(appointment);
+            _unitOfWork.GetRepository<Appointment>().Update(appointment);
+
+            await _notificationService.SendNotificationAsync($"Doctor {appointment.Doctor?.Fullname ?? ""} has completed an appointment.", NotificationType.AppointmentCompleted, appointment.PatientId);
+
             await _unitOfWork.SaveChangesAsync();
 
             return _mapper.Map<AppointmentDto>(appointment);
@@ -122,10 +130,10 @@ namespace BLL.Services.ImplementationService.AppointmentModule
         public async Task<IEnumerable<AvailableDoctorSlotDto>> GetAvailableSlotsAsync(int doctorId, DateTime date)
         {
             var spec = new GetAvailableSlotsSpecs(doctorId, date);
-            var doctorSchedules = await _scheduleRepo.GetAllAsync(spec);
+            var doctorSchedules = await _unitOfWork.GetRepository<DoctorSchedule>().GetAllAsync(spec);
 
             var appointmentSpec = new AppointmentNotCancelledSpec(doctorId, date);
-            var bookedAppointments = await _repo.GetAllAsync(appointmentSpec);
+            var bookedAppointments = await _unitOfWork.GetRepository<Appointment>().GetAllAsync(appointmentSpec);
             var bookedScheduleIds = bookedAppointments.Select(a => a.ScheduleId).ToHashSet();
 
             var freeSchedules = doctorSchedules.Where(s => !bookedScheduleIds.Contains(s.Id));
@@ -140,14 +148,14 @@ namespace BLL.Services.ImplementationService.AppointmentModule
         public async Task<IEnumerable<AppointmentDto>> GetDoctorAppointmentsAsync(int doctorId)
         {
             var spec = new AppointmentsDoctorSpec(doctorId);
-            var appointments = await _repo.GetAllAsync(spec);
+            var appointments = await _unitOfWork.GetRepository<Appointment>().GetAllAsync(spec);
             return _mapper.Map<IEnumerable<AppointmentDto>>(appointments);
         }
 
         public async Task<IEnumerable<AppointmentDto>> GetMyAppointmentsAsync(int userId)
         {
             var spec = new AppointmentsPatientSpec(userId);
-            var appointments = await _repo.GetAllAsync(spec);
+            var appointments = await _unitOfWork.GetRepository<Appointment>().GetAllAsync(spec);
             return _mapper.Map<IEnumerable<AppointmentDto>>(appointments);
         }
 
@@ -175,7 +183,7 @@ namespace BLL.Services.ImplementationService.AppointmentModule
                 ValidateFutureDate(dto.AppointmentDate.Value);
 
                 var scheduleId = dto.ScheduleId ?? appointment.ScheduleId;
-                var currentSchedule = await _scheduleRepo.GetByIdAsync(scheduleId);
+                var currentSchedule = await _unitOfWork.GetRepository<DoctorSchedule>().GetByIdAsync(scheduleId);
                 if (currentSchedule != null)
                     ValidateDayOfWeek(dto.AppointmentDate.Value, currentSchedule.DayOfWeek);
             }
@@ -196,7 +204,8 @@ namespace BLL.Services.ImplementationService.AppointmentModule
             _mapper.Map(dto, appointment);
             appointment.UpdatedAt = DateTime.UtcNow;
 
-            _repo.Update(appointment);
+            _unitOfWork.GetRepository<Appointment>().Update(appointment);
+            await _notificationService.SendNotificationAsync($"Patient {appointment.Patient!.Fullname ?? ""} has updated an appointment.", NotificationType.AppointmentUpdated, appointment.DoctorId);
             await _unitOfWork.SaveChangesAsync();
             return _mapper.Map<AppointmentDto>(appointment);
         }
@@ -207,7 +216,7 @@ namespace BLL.Services.ImplementationService.AppointmentModule
 
         private async Task<Appointment> GetAppointmentOrThrowAsync(int appointmentId)
         {
-            var appointment = (await _repo.GetAllAsync(new AppointmentWithIncludesSpecs(appointmentId))).FirstOrDefault();
+            var appointment = (await _unitOfWork.GetRepository<Appointment>().GetAllAsync(new AppointmentWithIncludesSpecs(appointmentId))).FirstOrDefault();
             if (appointment == null)
                 throw new AppointmentNotFoundException(appointmentId);
             return appointment;
@@ -219,17 +228,18 @@ namespace BLL.Services.ImplementationService.AppointmentModule
                 throw new UnauthorizedAppointmentAccessException(userId, appointment.Id);
         }
 
-        private async Task ValidatePatientAsync(int patientId)
+        private async Task<Patient> ValidatePatientAsync(int patientId)
         {
             var patient = await _userRepository.GetPatientWithAppointmentAsync(patientId)
                 ?? throw new PatientNotFoundException(patientId);
             if (patient.UserType != "Patient")
                 throw new UnauthorizedAccessException("Only patients can book appointments.");
+            return patient;
         }
 
         private async Task<DoctorSchedule> ValidateScheduleAsync(int scheduleId, int doctorId)
         {
-            var schedule = await _scheduleRepo.GetByIdAsync(scheduleId)
+            var schedule = await _unitOfWork.GetRepository<DoctorSchedule>().GetByIdAsync(scheduleId)
                 ?? throw new DoctorScheduleNotFoundException(scheduleId);
 
             if (schedule.DoctorId != doctorId)
@@ -244,11 +254,11 @@ namespace BLL.Services.ImplementationService.AppointmentModule
         private async Task ValidateSlotAvailabilityAsync(int doctorId, DateTime date, int scheduleId, int? excludeAppointmentId = null)
         {
             var appointmentSpec = new AppointmentNotCancelledSpec(doctorId, date);
-            var bookedAppointments = await _repo.GetAllAsync(appointmentSpec);
+            var bookedAppointments = await _unitOfWork.GetRepository<Appointment>().GetAllAsync(appointmentSpec);
             var isSlotTaken = bookedAppointments.Any(a => a.ScheduleId == scheduleId && a.Id != excludeAppointmentId);
             if (isSlotTaken)
             {
-                var schedule = await _scheduleRepo.GetByIdAsync(scheduleId);
+                var schedule = await _unitOfWork.GetRepository<DoctorSchedule>().GetByIdAsync(scheduleId);
                 throw new AppointmentSlotUnavailableException(doctorId, date, schedule?.StartTime ?? TimeSpan.Zero);
             }
         }

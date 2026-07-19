@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.SignalR;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -7,7 +8,8 @@ using System.Threading.Tasks;
 
 namespace BLL.Hubs
 {
-    public class ChatHub() : Hub
+    [Authorize]
+    public class ChatHub : Hub
     {
         public async Task JoinConsultation(int consultationId)
         {

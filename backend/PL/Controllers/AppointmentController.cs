@@ -1,6 +1,9 @@
+using BLL.Dtos;
 using BLL.Dtos.Appointment;
 using BLL.Dtos.Schedule;
+using BLL.Services.AbstractServices;
 using BLL.Services.AbstractServices.AppointmentModule;
+using DAL.Shared.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PL.Extention;
@@ -62,6 +65,7 @@ namespace PL.Controllers
         public async Task<IActionResult> CancelAppointment(int appointmentId)
         {
             var appointment = await _appointmentService.CancelAppointmentAsync(appointmentId, User.GetUserId());
+
             return Ok(appointment);
         }
 

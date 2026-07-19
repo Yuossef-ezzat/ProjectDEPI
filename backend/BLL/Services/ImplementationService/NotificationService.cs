@@ -70,14 +70,21 @@ namespace BLL.Services.ImplementationService
             await _unitOfWork.GetRepository<Notification>().AddAsync(notification);
             await _unitOfWork.SaveChangesAsync();
 
-
-            await hubContext.Clients.User(UserId.ToString()).SendAsync("NewNotification", new NotificationDto
+            try { 
+                await hubContext.Clients.User(UserId.ToString()).SendAsync("NewNotification", new NotificationDto
+                {
+                    Id = notification.Id,
+                    Message = message,
+                    IsRead = false,
+                    CreatedAt = notification.CreatedAt
+                });
+            }
+            catch (Exception ex)
             {
-                Id = notification.Id,
-                Message = message,
-                IsRead = false,
-                CreatedAt = notification.CreatedAt
-            });
+                // Log the exception or handle it as needed
+                Console.WriteLine($"Error sending notification via SignalR: {ex.Message}");
+            }
+            
         }
     }
 }

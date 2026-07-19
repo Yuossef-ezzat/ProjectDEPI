@@ -1,3 +1,4 @@
+using BLL.Dtos;
 using DAL.Shared.Enums;
 using System;
 using System.Collections.Generic;
@@ -11,7 +12,7 @@ namespace BLL.Services.AbstractServices
     {
         public Task SendNotificationAsync(string message, NotificationType type , int UserId);
 
-        public Task<List<BLL.Dtos.NotificationDto>> GetNotificationsAsync(int UserId);
+        public Task<List<NotificationDto>> GetNotificationsAsync(int UserId);
         Task MarkAsReadAsync(int notificationId);
         Task DeleteNotificationAsync(int notificationId);
         Task<int> GetUnreadCountAsync(int userId);
